@@ -14,25 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-set -e
+set \
+  -o errexit \
+  -o pipefail
 
 # Environment Variables
 AwsRegion="$AwsRegion"
 KeyAlias="$KeyAlias"
 VpnGatewayKey="$VpnGatewayKey"
+VpnGatewayProfile="$VpnGatewayProfile"
+VpnGatewayEndpoint="$VpnGatewayEndpoint"
 VpnLocalIp="$VpnLocalIp"
 
 # Utility Variables
 Aws="aws --region $AwsRegion"
 ServerConfig="/etc/openvpn/server"
 ClientConfig="/app/client-config/"
+ProfileTemplate="/app/template.ovpn"
 
 # Helpers
 ################################################################################
 function tagFile() {
+  declare t=$(cat "$1")
+  echo "${t//$2/$3}" > "$1"
 }
 
-function fetchCertificate() {
+function fetchVpnGatewayKey() {
   declare \
     keystore="$ServerConfig/keys" \
     parameter 
@@ -49,7 +56,7 @@ function fetchCertificate() {
   return
 }
 
-function makeCertificate() {
+function makeVpnGatewayKey() {
   declare \
     keystore="$ServerConfig/keys"
 
@@ -83,10 +90,52 @@ function makeServerConfiguration() {
   return
 }
 
-# Run
+function makeClientProfile() {
+  declare \
+    clientProfile="$ClientConfig/profile.ovpn"
+
+  tagFile $ProfileTemplate "{{ProfileName}}" "Debug"
+  tagFile $ProfileTemplate "{{VpnGatewayEndpoint}}" "$VpnGatewayEndpoint"
+
+  cat "$ProfileTemplate" \
+    <(echo -e '<ca>') \
+    $ServerConfig/keys/ca.crt \
+    <(echo -e '</ca>\n<cert>') \
+    $ClientConfig/client.crt \
+    <(echo -e '</cert>\n<key>') \
+    $ClientConfig/client.key \
+    <(echo -e '</key>\n<tls-crypt>') \
+    $ServerConfig/keys/vpn.key \
+    <(echo -e '</tls-crypt>') \
+    > "$clientProfile"
+
+  $Aws s3 cp "$clientProfile" "s3://$VpnGatewayProfile" --acl public-read
+
+  return
+}
+
+function configureNetworking() {
+  declare \
+    device
+
+  device="$(ip -j a | jq -r 'map(select(.ifname|test("^(eth|en)")))[0].ifname')"
+
+  iptables -C DOCKER-USER -j ACCEPT -i "tun0" -o "$device" &> /dev/null \
+  || iptables -I DOCKER-USER -j ACCEPT -i "tun0" -o "$device"
+
+  iptables -C DOCKER-USER -j ACCEPT -i "$device" -o "tun0" &> /dev/null \
+  || iptables -I DOCKER-USER -j ACCEPT -i "$device" -o "tun0"
+
+  return
+}
+
+# Runtime
 ################################################################################
-fetchCertificate || makeCertificate
+fetchVpnGatewayKey || makeVpnGatewayKey
 makeDiffieHelmanParameters
 makeServerConfiguration
+makeClientProfile
+
+$(which openvpn) --cd /etc/openvpn/server --config server.conf
 
 exit
