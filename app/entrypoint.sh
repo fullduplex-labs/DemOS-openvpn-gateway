@@ -21,15 +21,22 @@ set \
 # Environment Variables
 AwsRegion="$AwsRegion"
 KeyAlias="$KeyAlias"
+PrivateDomain="$PrivateDomain"
+PublicDomain="$PublicDomain"
+SubnetPortalCidr="$SubnetPortalCidr"
+SubnetOpsCidr="$SubnetOpsCidr"
+VpnGatewayCidr="$VpnGatewayCidr"
 VpnGatewayKey="$VpnGatewayKey"
 VpnGatewayProfile="$VpnGatewayProfile"
 VpnGatewayEndpoint="$VpnGatewayEndpoint"
+VpnDevice="$VpnDevice"
 VpnLocalIp="$VpnLocalIp"
 
 # Utility Variables
 Aws="aws --region $AwsRegion"
+AwsDns="169.254.169.253"
 ServerConfig="/etc/openvpn/server"
-ClientConfig="/app/client-config/"
+ClientConfig="/etc/openvpn/client"
 ProfileTemplate="/app/template.ovpn"
 
 # Helpers
@@ -41,7 +48,6 @@ function tagFile() {
 
 function fetchVpnGatewayKey() {
   declare \
-    keystore="$ServerConfig/keys" \
     parameter 
 
   parameter=$($Aws ssm get-parameter --name "$VpnGatewayKey" --with-decryption \
@@ -50,23 +56,20 @@ function fetchVpnGatewayKey() {
   [[ $(echo "$parameter" | jq -r '.Version') != "1" ]] \
     || return
 
-  echo "$parameter" | jq -r '.Value' > "$keystore/vpn.key"
-  chmod 600 "$keystore/vpn.key"
+  echo "$parameter" | jq -r '.Value' > "$ServerConfig/vpn.key"
+  chmod 600 "$ServerConfig/vpn.key"
 
   return
 }
 
 function makeVpnGatewayKey() {
-  declare \
-    keystore="$ServerConfig/keys"
-
-  openvpn --genkey --secret "$keystore/vpn.key"
+  openvpn --genkey --secret "$ServerConfig/vpn.key"
 
   $Aws ssm put-parameter \
     --type "SecureString" \
     --key-id "$KeyAlias" \
     --name "$VpnGatewayKey" \
-    --value "$(cat $keystore/vpn.key)" \
+    --value "$(cat $ServerConfig/vpn.key)" \
     --overwrite \
   &> /dev/null
 
@@ -74,18 +77,43 @@ function makeVpnGatewayKey() {
 }
 
 function makeDiffieHelmanParameters() {
-  declare \
-    keystore="$ServerConfig/keys"
-
-  openssl dhparam -out "$keystore/dh2048.pem" 2048
+  openssl dhparam -out "$ServerConfig/dh2048.pem" 2048
   return
 }
 
 function makeServerConfiguration() {
   declare \
-    config="$ServerConfig/server.conf"
+    config="$ServerConfig/server.conf" \
+    prefix="${VpnGatewayCidr%.*}" \
+    mask
+
+  mask="${VpnGatewayCidr##*/}"
+  [[ $mask != '25' ]] && {
+    printf "The VpnGatewayCidr expects a subnet mask of 25"
+    return 1
+  }
 
   tagFile $config "{{VpnLocalIp}}" "$VpnLocalIp"
+  tagFile $config "{{VpnGatewayPrefix}}" "$prefix"
+  tagFile $config "{{PrivateDomain}}" "$PrivateDomain"
+  tagFile $config "{{PublicDomain}}" "$PublicDomain"
+
+  mask="${SubnetPortalCidr##*/}"
+  [[ $mask != '16' ]] && {
+    printf "The SubnetPortalCidr expects a subnet mask of 16"
+    return 1
+  }
+  prefix=(${SubnetPortalCidr//./ })
+  tagFile $config "{{SubnetPortalPrefix}}" "${prefix[0]}.${prefix[1]}"
+
+
+  mask="${SubnetOpsCidr##*/}"
+  [[ $mask != '16' ]] && {
+    printf "The SubnetOpsCidr expects a subnet mask of 16"
+    return 1
+  }
+  prefix=(${SubnetOpsCidr//./ })
+  tagFile $config "{{SubnetOpsPrefix}}" "${prefix[0]}.${prefix[1]}"
 
   return
 }
@@ -99,13 +127,13 @@ function makeClientProfile() {
 
   cat "$ProfileTemplate" \
     <(echo -e '<ca>') \
-    $ServerConfig/keys/ca.crt \
+    $ServerConfig/ca.crt \
     <(echo -e '</ca>\n<cert>') \
     $ClientConfig/client.crt \
     <(echo -e '</cert>\n<key>') \
     $ClientConfig/client.key \
     <(echo -e '</key>\n<tls-crypt>') \
-    $ServerConfig/keys/vpn.key \
+    $ServerConfig/vpn.key \
     <(echo -e '</tls-crypt>') \
     > "$clientProfile"
 
@@ -116,15 +144,50 @@ function makeClientProfile() {
 
 function configureNetworking() {
   declare \
-    device
+    prefix="${VpnGatewayCidr%.*}" \
+    dnat tuple masquerade ip
 
-  device="$(ip -j a | jq -r 'map(select(.ifname|test("^(eth|en)")))[0].ifname')"
+  dnat=(
+    "${prefix}.200:${AwsDns}"
+  )
 
-  iptables -C DOCKER-USER -j ACCEPT -i "tun0" -o "$device" &> /dev/null \
-  || iptables -I DOCKER-USER -j ACCEPT -i "tun0" -o "$device"
+  # masquerade=()
 
-  iptables -C DOCKER-USER -j ACCEPT -i "$device" -o "tun0" &> /dev/null \
-  || iptables -I DOCKER-USER -j ACCEPT -i "$device" -o "tun0"
+  iptables-legacy \
+    -C DOCKER-USER -j ACCEPT -i "tun0" -o "$VpnDevice" &> /dev/null \
+  || iptables-legacy \
+    -I DOCKER-USER -j ACCEPT -i "tun0" -o "$VpnDevice"
+
+  iptables-legacy \
+    -C DOCKER-USER -j ACCEPT -i "$VpnDevice" -o "tun0" &> /dev/null \
+  || iptables-legacy \
+    -I DOCKER-USER -j ACCEPT -i "$VpnDevice" -o "tun0"
+
+  # Setup Destination NAT (DNAT)
+  for tuple in "${dnat[@]}"; do
+    iptables-legacy -t nat -C PREROUTING -j DNAT \
+      -s "$VpnGatewayCidr" \
+      -d "${tuple%:*}/32" \
+      --to-destination "${tuple#*:}" \
+      &> /dev/null \
+    || iptables-legacy -t nat -I PREROUTING -j DNAT \
+      -s "$VpnGatewayCidr" \
+      -d "${tuple%:*}/32" \
+      --to-destination "${tuple#*:}"
+  done
+
+  # # Setup NAT for Public IPs (MASQUERADE)
+  # for ip in "${masquerade[@]}"; do
+  #   iptables-legacy -t nat -C POSTROUTING -j MASQUERADE \
+  #     -s "$VpnGatewayCidr" \
+  #     -d "$ip/32" \
+  #     -o "$VpnDevice" \
+  #     &> /dev/null \
+  #   || iptables-legacy -t nat -A POSTROUTING -j MASQUERADE \
+  #     -s "$VpnGatewayCidr" \
+  #     -d "$ip/32" \
+  #     -o "$VpnDevice"
+  # done
 
   return
 }
@@ -135,6 +198,7 @@ fetchVpnGatewayKey || makeVpnGatewayKey
 makeDiffieHelmanParameters
 makeServerConfiguration
 makeClientProfile
+configureNetworking
 
 $(which openvpn) --cd /etc/openvpn/server --config server.conf
 
