@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-ARG DEBIAN_FRONTEND=noninteractive
 ARG AWS_SRC="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
+
+ARG DEBIAN_FRONTEND=noninteractive
 
 FROM ubuntu:22.04 as build-image
 ARG DEBIAN_FRONTEND
@@ -40,15 +41,6 @@ RUN bash <<EOF
 apt-get update
 apt-get install -y openssl openvpn jq iptables
 rm -rf /var/lib/apt/lists/*
-#
-# OpenVPN Requirements
-# openssl dhparam -out /etc/openvpn/server/dh2048.pem 2048
-# sed -i -e \
-#   '/^\#net.ipv4.ip_forward/s/^.*$/net.ipv4.ip_forward=1/' \
-#   /etc/sysctl.conf
-# sed -i -e \
-#   '/^\#net.ipv6.conf.all.forwarding/s/^.*$/net.ipv6.conf.all.forwarding=1/' \
-#   /etc/sysctl.conf
 EOF
 
 COPY etc/ /etc
@@ -56,7 +48,6 @@ COPY app/ /app
 RUN chmod +x /app/entrypoint.sh
 WORKDIR /app
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s CMD pidof openvpn
+HEALTHCHECK --interval=30s --timeout=3s --start-period=300s CMD pidof openvpn
 
-EXPOSE 1194
 ENTRYPOINT [ "/app/entrypoint.sh" ]

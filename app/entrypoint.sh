@@ -27,8 +27,9 @@ SubnetPortalCidr="$SubnetPortalCidr"
 SubnetOpsCidr="$SubnetOpsCidr"
 VpnGatewayCidr="$VpnGatewayCidr"
 VpnGatewayKey="$VpnGatewayKey"
-VpnGatewayProfile="$VpnGatewayProfile"
 VpnGatewayEndpoint="$VpnGatewayEndpoint"
+VpnGatewayProfile="$VpnGatewayProfile"
+VpnGatewayProfileDesc="$VpnGatewayProfileDesc"
 VpnDevice="$VpnDevice"
 VpnLocalIp="$VpnLocalIp"
 
@@ -122,7 +123,7 @@ function makeClientProfile() {
   declare \
     clientProfile="$ClientConfig/profile.ovpn"
 
-  tagFile $ProfileTemplate "{{ProfileName}}" "Debug"
+  tagFile $ProfileTemplate "{{VpnGatewayProfileDesc}}" "$VpnGatewayProfileDesc"
   tagFile $ProfileTemplate "{{VpnGatewayEndpoint}}" "$VpnGatewayEndpoint"
 
   cat "$ProfileTemplate" \
