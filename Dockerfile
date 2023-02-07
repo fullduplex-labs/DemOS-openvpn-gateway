@@ -39,7 +39,7 @@ COPY --from=build-image /usr/local/aws-cli /usr/local/aws-cli
 ARG DEBIAN_FRONTEND
 RUN bash <<EOF
 apt-get update
-apt-get install -y openssl openvpn jq iptables
+apt-get install -y openvpn jq iptables
 rm -rf /var/lib/apt/lists/*
 EOF
 

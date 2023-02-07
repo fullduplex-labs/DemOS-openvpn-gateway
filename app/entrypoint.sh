@@ -77,11 +77,6 @@ function makeVpnGatewayKey() {
   return
 }
 
-function makeDiffieHelmanParameters() {
-  openssl dhparam -out "$ServerConfig/dh2048.pem" 2048
-  return
-}
-
 function makeServerConfiguration() {
   declare \
     config="$ServerConfig/server.conf" \
@@ -196,7 +191,6 @@ function configureNetworking() {
 # Runtime
 ################################################################################
 fetchVpnGatewayKey || makeVpnGatewayKey
-makeDiffieHelmanParameters
 makeServerConfiguration
 makeClientProfile
 configureNetworking
