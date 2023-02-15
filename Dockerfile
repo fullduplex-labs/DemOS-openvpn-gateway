@@ -14,32 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-ARG AWS_SRC="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-FROM ubuntu:22.04 as build-image
-ARG DEBIAN_FRONTEND
-ARG AWS_SRC
-WORKDIR /tmp
-RUN bash <<EOF
-apt-get update
-apt-get install -y unzip curl
-rm -rf /var/lib/apt/lists/*
-#
-# Install AWS-CLI
-curl -L -o awscli.zip ${AWS_SRC}
-unzip awscli.zip
-./aws/install
-EOF
-
 FROM ubuntu:22.04
-COPY --from=build-image /usr/local/bin /usr/local/bin
-COPY --from=build-image /usr/local/aws-cli /usr/local/aws-cli
-ARG DEBIAN_FRONTEND
+ENV DEBIAN_FRONTEND=noninteractive
 RUN bash <<EOF
 apt-get update
-apt-get install -y openvpn jq iptables
+apt-get install -y openvpn iptables
 rm -rf /var/lib/apt/lists/*
 EOF
 

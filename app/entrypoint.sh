@@ -19,62 +19,24 @@ set \
   -o pipefail
 
 # Environment Variables
-AwsRegion="$AwsRegion"
-KeyAlias="$KeyAlias"
 PrivateDomain="$PrivateDomain"
 PublicDomain="$PublicDomain"
 SubnetPortalCidr="$SubnetPortalCidr"
 SubnetOpsCidr="$SubnetOpsCidr"
 VpnGatewayCidr="$VpnGatewayCidr"
-VpnGatewayKey="$VpnGatewayKey"
-VpnGatewayEndpoint="$VpnGatewayEndpoint"
-VpnGatewayProfile="$VpnGatewayProfile"
-VpnGatewayProfileDesc="$VpnGatewayProfileDesc"
 VpnDevice="$VpnDevice"
 VpnLocalIp="$VpnLocalIp"
 
 # Utility Variables
-Aws="aws --region $AwsRegion"
 AwsDns="169.254.169.253"
 ServerConfig="/etc/openvpn/server"
 ClientConfig="/etc/openvpn/client"
-ProfileTemplate="/app/template.ovpn"
 
 # Helpers
 ################################################################################
 function tagFile() {
   declare t=$(cat "$1")
   echo "${t//$2/$3}" > "$1"
-}
-
-function fetchVpnGatewayKey() {
-  declare \
-    parameter 
-
-  parameter=$($Aws ssm get-parameter --name "$VpnGatewayKey" --with-decryption \
-    | jq -r '.Parameter')
-
-  [[ $(echo "$parameter" | jq -r '.Version') != "1" ]] \
-    || return
-
-  echo "$parameter" | jq -r '.Value' > "$ServerConfig/vpn.key"
-  chmod 600 "$ServerConfig/vpn.key"
-
-  return
-}
-
-function makeVpnGatewayKey() {
-  openvpn --genkey --secret "$ServerConfig/vpn.key"
-
-  $Aws ssm put-parameter \
-    --type "SecureString" \
-    --key-id "$KeyAlias" \
-    --name "$VpnGatewayKey" \
-    --value "$(cat $ServerConfig/vpn.key)" \
-    --overwrite \
-  &> /dev/null
-
-  return
 }
 
 function makeServerConfiguration() {
@@ -110,30 +72,6 @@ function makeServerConfiguration() {
   }
   prefix=(${SubnetOpsCidr//./ })
   tagFile $config "{{SubnetOpsPrefix}}" "${prefix[0]}.${prefix[1]}"
-
-  return
-}
-
-function makeClientProfile() {
-  declare \
-    clientProfile="$ClientConfig/profile.ovpn"
-
-  tagFile $ProfileTemplate "{{VpnGatewayProfileDesc}}" "$VpnGatewayProfileDesc"
-  tagFile $ProfileTemplate "{{VpnGatewayEndpoint}}" "$VpnGatewayEndpoint"
-
-  cat "$ProfileTemplate" \
-    <(echo -e '<ca>') \
-    $ServerConfig/ca.crt \
-    <(echo -e '</ca>\n<cert>') \
-    $ClientConfig/client.crt \
-    <(echo -e '</cert>\n<key>') \
-    $ClientConfig/client.key \
-    <(echo -e '</key>\n<tls-crypt>') \
-    $ServerConfig/vpn.key \
-    <(echo -e '</tls-crypt>') \
-    > "$clientProfile"
-
-  $Aws s3 cp "$clientProfile" "s3://$VpnGatewayProfile" --acl public-read
 
   return
 }
@@ -190,9 +128,7 @@ function configureNetworking() {
 
 # Runtime
 ################################################################################
-fetchVpnGatewayKey || makeVpnGatewayKey
 makeServerConfiguration
-makeClientProfile
 configureNetworking
 
 $(which openvpn) --cd /etc/openvpn/server --config server.conf
