@@ -18,17 +18,18 @@ set \
   -o errexit \
   -o pipefail
 
-# Environment Variables
+# Environment Variables: Required
 PrivateDomain="$PrivateDomain"
 PublicDomain="$PublicDomain"
 SubnetPortalCidr="$SubnetPortalCidr"
 SubnetOpsCidr="$SubnetOpsCidr"
 VpnGatewayCidr="$VpnGatewayCidr"
-VpnDevice="$VpnDevice"
-VpnLocalIp="$VpnLocalIp"
+
+# Environment Variables: Optional
+VpnDevice="${VpnDevice:-eth0}"
+VpnDnsEndpoint="${VpnDnsEndpoint:-169.254.169.253}"
 
 # Utility Variables
-AwsDns="169.254.169.253"
 ServerConfig="/etc/openvpn/server"
 ClientConfig="/etc/openvpn/client"
 
@@ -41,37 +42,27 @@ function tagFile() {
 
 function makeServerConfiguration() {
   declare \
-    config="$ServerConfig/server.conf" \
-    prefix="${VpnGatewayCidr%.*}" \
-    mask
+    config="$ServerConfig/server.conf"
 
-  mask="${VpnGatewayCidr##*/}"
-  [[ $mask != '25' ]] && {
+  [[ ${VpnGatewayCidr##*/} != "25" ]] && {
     printf "The VpnGatewayCidr expects a subnet mask of 25"
     return 1
   }
 
-  tagFile $config "{{VpnLocalIp}}" "$VpnLocalIp"
-  tagFile $config "{{VpnGatewayPrefix}}" "$prefix"
+  tagFile $config "{{VpnDeviceIp}}" \
+    "$(ip -o -4 addr list $VpnDevice | awk '{print $4}' | cut -d/ -f1)"
+
+  tagFile $config "{{VpnGatewayPrefix}}" "${VpnGatewayCidr%.*}"
   tagFile $config "{{PrivateDomain}}" "$PrivateDomain"
   tagFile $config "{{PublicDomain}}" "$PublicDomain"
 
-  mask="${SubnetPortalCidr##*/}"
-  [[ $mask != '16' ]] && {
-    printf "The SubnetPortalCidr expects a subnet mask of 16"
-    return 1
-  }
-  prefix=(${SubnetPortalCidr//./ })
-  tagFile $config "{{SubnetPortalPrefix}}" "${prefix[0]}.${prefix[1]}"
+  tagFile $config "{{SubnetPortalPrefix}}" "${SubnetPortalCidr%/*}"
+  tagFile $config "{{SubnetPortalMask}}" \
+    "$(ipcalc -nb $SubnetPortalCidr | grep Netmask | awk '{print $2}')"
 
-
-  mask="${SubnetOpsCidr##*/}"
-  [[ $mask != '16' ]] && {
-    printf "The SubnetOpsCidr expects a subnet mask of 16"
-    return 1
-  }
-  prefix=(${SubnetOpsCidr//./ })
-  tagFile $config "{{SubnetOpsPrefix}}" "${prefix[0]}.${prefix[1]}"
+  tagFile $config "{{SubnetOpsPrefix}}" "${SubnetOpsCidr%/*}"
+  tagFile $config "{{SubnetOpsMask}}" \
+    "$(ipcalc -nb $SubnetOpsCidr | grep Netmask | awk '{print $2}')"
 
   return
 }
@@ -82,7 +73,7 @@ function configureNetworking() {
     dnat tuple masquerade ip
 
   dnat=(
-    "${prefix}.200:${AwsDns}"
+    "${prefix}.200:${VpnDnsEndpoint}"
   )
 
   # masquerade=()

@@ -18,7 +18,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN bash <<EOF
 apt-get update
-apt-get install -y openvpn iptables
+apt-get install -y openvpn iptables ipcalc
 rm -rf /var/lib/apt/lists/*
 EOF
 
