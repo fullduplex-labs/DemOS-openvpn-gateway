@@ -21,13 +21,13 @@ set \
 # Environment Variables: Required
 PrivateDomain="$PrivateDomain"
 PublicDomain="$PublicDomain"
-SubnetPortalCidr="$SubnetPortalCidr"
-SubnetOpsCidr="$SubnetOpsCidr"
+SubnetCidrs=(${SubnetCidrs//|/ })
 VpnGatewayCidr="$VpnGatewayCidr"
 
 # Environment Variables: Optional
 VpnDevice="${VpnDevice:-eth0}"
 VpnDnsEndpoint="${VpnDnsEndpoint:-169.254.169.253}"
+VpnDnatHosts=(${VpnDnatHosts//|/ })
 
 # Utility Variables
 ServerConfig="/etc/openvpn/server"
@@ -56,13 +56,11 @@ function makeServerConfiguration() {
   tagFile $config "{{PrivateDomain}}" "$PrivateDomain"
   tagFile $config "{{PublicDomain}}" "$PublicDomain"
 
-  tagFile $config "{{SubnetPortalPrefix}}" "${SubnetPortalCidr%/*}"
-  tagFile $config "{{SubnetPortalMask}}" \
-    "$(ipcalc -nb $SubnetPortalCidr | grep Netmask | awk '{print $2}')"
-
-  tagFile $config "{{SubnetOpsPrefix}}" "${SubnetOpsCidr%/*}"
-  tagFile $config "{{SubnetOpsMask}}" \
-    "$(ipcalc -nb $SubnetOpsCidr | grep Netmask | awk '{print $2}')"
+  declare subnet mask
+  for subnet in ${SubnetCidrs[@]}; do
+    mask="$(ipcalc -nb $subnet | grep Netmask | awk '{print $2}')"
+    printf "push \"route ${subnet%/*} $mask\"\n" >> $config
+  done
 
   return
 }
@@ -75,6 +73,12 @@ function configureNetworking() {
   dnat=(
     "${prefix}.200:${VpnDnsEndpoint}"
   )
+  [[ ${#VpnDnatHosts[@]} -ne 0 ]] && {
+    declare host
+    for host in ${VpnDnatHosts[@]}; do
+      dnat+=("${prefix}.${host%:*}:${host#*:}")
+    done
+  }
 
   # masquerade=()
 
